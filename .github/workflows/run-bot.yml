@@ -2,7 +2,7 @@ name: Run Trading Bot
 
 on:
   schedule:
-    - cron: '*/10 13-21 * * 1-5'  # every 10 mins, 9AM–5PM ET, Mon–Fri (in UTC: 13–21)
+    - cron: '0 13 * * 1-5'  # 9AM ET (13:00 UTC), Mon–Fri
   workflow_dispatch:  # allows manual trigger from GitHub UI
 
 jobs:
