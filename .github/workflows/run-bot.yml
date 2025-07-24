@@ -24,7 +24,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run trading bot
-      run: python bot.py  # change to your script name
+      run: python TSAI.py  # change to your script name
       env:
         ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
         ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
