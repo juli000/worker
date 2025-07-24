@@ -237,6 +237,7 @@ def main():
         # Fetch all bars for all symbols at once using REST API (1Min, 1000 bars)
         bars_data = fetch_bars_rest(SYMBOLS, limit=1000, timeframe='1Min')
         bars_dict = bars_data.get('bars', {}) if bars_data else {}
+        action_taken = set()
         for symbol in SYMBOLS:
             try:
                 bars = bars_dict.get(symbol, [])
@@ -261,16 +262,23 @@ def main():
                 if action == 'buy' and max_qty > 0:
                     decisions.append(f"{symbol:<5} -> BUY {max_qty}")
                     place_order(symbol, 'buy', max_qty)
+                    action_taken.add(symbol)
                 elif action == 'sell':
                     # Sell all shares held for this symbol
                     qty_to_sell = int(open_positions.get(symbol, 0))
                     if qty_to_sell > 0:
                         decisions.append(f"{symbol:<5} -> SELL {qty_to_sell}")
                         place_order(symbol, 'sell', qty_to_sell)
+                        action_taken.add(symbol)
                 else:
                     holds.append(f"{symbol:<5}")
             except Exception as e:
                 print(f"[{datetime.datetime.now()}] {symbol} Error: {e}")
+
+        # Ensure all open positions are shown as HOLD if no action was taken
+        for symbol in open_positions:
+            if symbol not in action_taken and f"{symbol:<5}" not in holds:
+                holds.append(f"{symbol:<5}")
 
         # Print all price data together
         print(f"\n[{datetime.datetime.now()}] === Latest Price Data for All Symbols ===")
@@ -317,7 +325,8 @@ def main():
         if holds:
             print(f"\nHOLD: {' '.join(holds)}")
 
-        # Sleep for 30 seconds (for testing/demo purposes)
+        print(f"[{datetime.datetime.now()}] Loop complete. Sleeping before next iteration...")
+        # Sleep for 2 minutes (for testing/demo purposes)
         time.sleep(120)
 
 # ================
