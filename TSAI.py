@@ -196,7 +196,16 @@ def log_trade(symbol, action):
 # 🧪 Main Bot Loop
 # ===================
 def main():
+    import pytz
+    eastern = pytz.timezone('US/Eastern')
     while True:
+        now = datetime.datetime.now(eastern)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=30, second=0, microsecond=0)
+        if not (market_open <= now <= market_close):
+            print(f"[{now}] Market is closed. Waiting for open hours (9:30-16:30 ET)...")
+            time.sleep(60)
+            continue
         print("\n" + "="*80 + "\n")
         # Fetch account info and open positions
         try:
