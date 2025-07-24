@@ -44,18 +44,22 @@ def print_open_trades():
             print(f"{pos.symbol:<8} {pos.qty:<8} {pos.side:<6} {pos.market_value:<15} {pos.unrealized_pl:<15}")
     except Exception as e:
         print(f"[{datetime.datetime.now()}] Error fetching open trades: {e}")
+
+from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 import pandas as pd
 import time
 import datetime
 import os
 
+load_dotenv()
+
 # =========================
-# 🔐 Alpaca API Credentials
+# 🔐 Alpaca API Credentials (from .env)
 # =========================
-API_KEY = 'PK6NP9PMA73CZ4XD7LOE'
-API_SECRET = 'buL8PWH2PbE1bjCQIhekJ4jPWF3Zn8hicJrIGYCR'
-BASE_URL = 'https://paper-api.alpaca.markets'  # Paper trading URL
+API_KEY = os.getenv('API_KEY')
+API_SECRET = os.getenv('API_SECRET')
+BASE_URL = os.getenv('BASE_URL')
 
 # ===================
 # ⚙️ Configuration
