@@ -1,0 +1,30 @@
+name: Run Trading Bot
+
+on:
+  schedule:
+    - cron: '*/10 13-21 * * 1-5'  # every 10 mins, 9AM–5PM ET, Mon–Fri (in UTC: 13–21)
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'  # or whatever you use
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run trading bot
+      run: python bot.py  # change to your script name
+      env:
+        ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+        ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
