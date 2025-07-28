@@ -264,11 +264,11 @@ def main():
                     place_order(symbol, 'buy', max_qty)
                     action_taken.add(symbol)
                 elif action == 'sell':
-                    # Sell all shares held for this symbol
-                    qty_to_sell = int(open_positions.get(symbol, 0))
-                    if qty_to_sell > 0:
-                        decisions.append(f"{symbol:<5} -> SELL {qty_to_sell}")
-                        place_order(symbol, 'sell', qty_to_sell)
+                    # Sell all shares held for this symbol, but only if available
+                    qty_available = int(open_positions.get(symbol, 0))
+                    if qty_available > 0:
+                        decisions.append(f"{symbol:<5} -> SELL {qty_available}")
+                        place_order(symbol, 'sell', qty_available)
                         action_taken.add(symbol)
                 else:
                     holds.append(f"{symbol:<5}")
