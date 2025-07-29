@@ -147,11 +147,21 @@ def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
     symbol = df.get('symbol', [None]*len(df))[-1] if 'symbol' in df.columns else None
     has_position = symbol in open_positions if open_positions else False
 
-    # Only sell if SMA condition AND unrealized P/L is positive
+    # Take profit threshold (e.g., $50 per position)
+    TAKE_PROFIT = 25.0
+
+    # Only sell if SMA condition AND unrealized P/L is positive OR take profit reached
     if want_to_buy and float(cash) > 0 and not has_position:
         return 'buy'
-    elif want_to_sell and has_position and unrealized_pl is not None and float(unrealized_pl) > 0:
-        return 'sell'
+    elif has_position and unrealized_pl is not None:
+        # Take profit: sell if unrealized profit exceeds threshold
+        if float(unrealized_pl) >= TAKE_PROFIT:
+            return 'sell'
+        # Original sell condition: SMA5 < SMA15 and profit
+        elif want_to_sell and float(unrealized_pl) > 0:
+            return 'sell'
+        else:
+            return 'hold'
     else:
         return 'hold'
 
