@@ -40,7 +40,9 @@ def print_open_trades():
             return
         print(f"\n[{datetime.datetime.now()}] === Open Trades ===")
         print(f"{'Symbol':<8} {'Qty':<8} {'Side':<6} {'Market Value':<15} {'Unrealized P/L':<15}")
-        for pos in positions:
+        # Sort positions by unrealized profit descending
+        sorted_positions = sorted(positions, key=lambda p: float(getattr(p, 'unrealized_pl', 0)), reverse=True)
+        for pos in sorted_positions:
             print(f"{pos.symbol:<8} {pos.qty:<8} {pos.side:<6} {pos.market_value:<15} {pos.unrealized_pl:<15}")
     except Exception as e:
         print(f"[{datetime.datetime.now()}] Error fetching open trades: {e}")
@@ -71,7 +73,7 @@ SYMBOLS = [
     'DHR', 'TMO', 'LIN', 'VZ', 'DIS', 'NKE', 'TXN', 'NEE', 'ORCL', 'PM',
     'AMGN', 'MDT', 'CRM', 'HON', 'UNP', 'QCOM', 'BMY', 'LOW', 'MS'
 ]  # Top 50 large-cap US stocks (IEX-compatible as possible)
-MAX_INVEST_PER_STOCK = 1000  # Max $1,000 per stock
+MAX_INVEST_PER_STOCK = 5000  # Max $5,000 per stock
 LOG_FILE = 'trade_log.csv'
 
 # ===================
@@ -138,9 +140,6 @@ def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
 
     # 🛡️ Prevent index errors if not enough data
     if len(df) < 16 or df['SMA5'].isna().iloc[-2] or df['SMA15'].isna().iloc[-2]:
-        print(f"[DEBUG] DataFrame length: {len(df)}")
-        print(f"[DEBUG] Last 3 SMA5: {df['SMA5'].tail(3).values}")
-        print(f"[DEBUG] Last 3 SMA15: {df['SMA15'].tail(3).values}")
         return 'hold'  # Not enough data to make decision
 
     want_to_buy = df['SMA5'].iloc[-1] > df['SMA15'].iloc[-1]
@@ -215,15 +214,54 @@ def main():
             print(f"[{datetime.datetime.now()}] Error fetching open positions: {e}")
             open_positions = {}
 
-        # Print account summary
-        print(f"\n[{datetime.datetime.now()}] === Account Summary ===")
-        print(f"Cash: ${cash:,.2f}")
-        print(f"Open Positions: {open_positions if open_positions else 'None'}")
+        # ...existing code...
+        # Print account summary at the very end, after all other output
+        print(f"\n" + "="*40)
+        print(f"[{datetime.datetime.now()}] ACCOUNT SUMMARY")
+        invested_amount = 0.0
+        num_positions = 0
+        for p in positions:
+            try:
+                invested_amount += float(p.market_value)
+                num_positions += 1
+            except Exception:
+                pass
+        try:
+            buying_power = float(getattr(account, 'buying_power', 0))
+        except Exception:
+            buying_power = 0.0
+        try:
+            portfolio_value = float(getattr(account, 'portfolio_value', 0))
+        except Exception:
+            portfolio_value = 0.0
+        # Format and align all numbers
+        label_width = 18
+        value_width = 15
+        print(f"{'Cash:':<{label_width}}{'$':>2}{cash:>{value_width-1},.2f}")
+        print(f"{'Invested:':<{label_width}}{'$':>2}{invested_amount:>{value_width-1},.2f}")
+        print(f"{'Positions:':<{label_width}}{num_positions:>{value_width}}")
+        print(f"{'Buying Power:':<{label_width}}{'$':>2}{buying_power:>{value_width-1},.2f}")
+        print(f"{'Portfolio Value:':<{label_width}}{'$':>2}{portfolio_value:>{value_width-1},.2f}")
+
+        # Print total unrealized profit for all open positions
+        total_unrealized_profit = 0.0
+        try:
+            for p in positions:
+                try:
+                    total_unrealized_profit += float(p.unrealized_pl)
+                except Exception:
+                    pass
+            print(f"Total Unrealized Profit: ${total_unrealized_profit:,.2f}")
+        except Exception:
+            print("Could not calculate total unrealized profit.")
+        print("-"*40)
 
         print_open_trades()
         all_data = {}
         decisions = []
         holds = []
+        total_buy_cost = 0.0
+        buy_details = []
         # Fetch all bars for all symbols at once using REST API (1Min, 1000 bars)
         bars_data = fetch_bars_rest(SYMBOLS, limit=1000, timeframe='1Min')
         bars_dict = bars_data.get('bars', {}) if bars_data else {}
@@ -232,19 +270,14 @@ def main():
             try:
                 bars = bars_dict.get(symbol, [])
                 if not bars:
-                    # Silently skip symbols with no data
                     continue
-                # Convert to DataFrame
                 df = pd.DataFrame(bars)
-                # Rename columns to match expected names
                 rename_map = {'c': 'close', 'o': 'open', 'h': 'high', 'l': 'low', 'v': 'volume'}
                 df.rename(columns=rename_map, inplace=True)
-                # Convert 't' (timestamp) to datetime index if present
                 if 't' in df.columns:
                     df['time'] = pd.to_datetime(df['t'], unit='ms') if df['t'].dtype != object else pd.to_datetime(df['t'])
                     df.set_index('time', inplace=True)
                 all_data[symbol] = df.tail(1)
-                # Calculate max shares to buy for $1,000 per stock
                 latest_price = float(df['close'].iloc[-1]) if not df.empty else 0
                 max_qty = int(MAX_INVEST_PER_STOCK // latest_price) if latest_price > 0 else 0
 
@@ -260,6 +293,9 @@ def main():
 
                 action = run_strategy(df, open_positions=open_positions, cash=cash, unrealized_pl=unrealized_pl)
                 if action == 'buy' and max_qty > 0:
+                    buy_cost = latest_price * max_qty
+                    total_buy_cost += buy_cost
+                    buy_details.append(f"{symbol}: {max_qty} @ ${latest_price:.2f} = ${buy_cost:.2f}")
                     decisions.append(f"{symbol:<5} -> BUY {max_qty}")
                     place_order(symbol, 'buy', max_qty)
                     action_taken.add(symbol)
@@ -279,50 +315,38 @@ def main():
             if symbol not in action_taken and f"{symbol:<5}" not in holds:
                 holds.append(f"{symbol:<5}")
 
-        # Print all price data together
-        print(f"\n[{datetime.datetime.now()}] === Latest Price Data for All Symbols ===")
+        # Do not print price data as requested
 
-        def letter_round(val):
-            try:
-                val = float(val)
-            except:
-                return str(val)
-            if abs(val) >= 1_000_000_000:
-                return f"{val/1_000_000_000:.2f}B"
-            elif abs(val) >= 1_000_000:
-                return f"{val/1_000_000:.2f}M"
-            elif abs(val) >= 1_000:
-                return f"{val/1_000:.2f}k"
-            else:
-                return f"{val:.2f}"
+        # After all buys, print buy details and total buy cost
+        if buy_details:
+            print("\n" + "="*40)
+            print("BUY SUMMARY")
+            print("-"*40)
+            print(f"{'Symbol':<8} {'Qty':<6} {'Price':<10} {'Total':<12}")
+            for detail in buy_details:
+                # detail format: "{symbol}: {max_qty} @ ${latest_price:.2f} = ${buy_cost:.2f}"
+                parts = detail.split(':')
+                symbol = parts[0]
+                rest = parts[1].strip().split(' ')
+                qty = rest[0]
+                price = rest[2]
+                total = rest[-1]
+                print(f"{symbol:<8} {qty:<6} {price:<10} {total:<12}")
+            print("-"*40)
+            print(f"Total Buy Cost This Iteration: ${total_buy_cost:.2f}")
+            print("="*40)
 
-        # Standardize column widths
-        col_widths = {col: max(10, len(col)) for col in next(iter(all_data.values())).columns}
-        symbol_width = 8
-        # Precompute max width for each column
-        for data in all_data.values():
-            for col in data.columns:
-                for val in data[col]:
-                    rounded = letter_round(val)
-                    col_widths[col] = max(col_widths[col], len(rounded)+2)
-
-        # Print header
-        header = f"{'Symbol':<{symbol_width}} " + " ".join([f"{col:<{col_widths[col]}}" for col in data.columns])
-        print(header)
-        # Print rows
-        for symbol, data in all_data.items():
-            for idx, row in data.iterrows():
-                row_str = f"{symbol:<{symbol_width}} " + " ".join([
-                    f"{letter_round(row[col]):<{col_widths[col]}}" for col in data.columns
-                ])
-                print(row_str)
-
-        # Print all decisions together
-        print(f"\n[{datetime.datetime.now()}] === Decisions ===")
+        # Print only actual actions taken (buy/sell) for this iteration
+        print("\n" + "="*40)
+        print(f"[{datetime.datetime.now()}] DECISIONS")
+        print("-"*40)
+        # Remove duplicates and only print actions that occurred
+        printed = set()
         for decision in decisions:
-            print(decision)
-        if holds:
-            print(f"\nHOLD: {' '.join(holds)}")
+            if decision not in printed:
+                print(decision)
+                printed.add(decision)
+        print("="*40)
 
         print(f"[{datetime.datetime.now()}] Loop complete. Sleeping before next iteration...")
         # Sleep for 2 minutes (for testing/demo purposes)
