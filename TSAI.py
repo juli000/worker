@@ -131,12 +131,10 @@ def fetch_data(symbol):
 # ===================
 # 🤖 Trading Strategy
 # ===================
-def run_strategy(df, open_positions=None, cash=None):
+def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
     # Use shorter SMAs for more frequent signals
     df['SMA5'] = df['close'].rolling(window=5).mean()
     df['SMA15'] = df['close'].rolling(window=15).mean()
-
-
 
     # 🛡️ Prevent index errors if not enough data
     if len(df) < 16 or df['SMA5'].isna().iloc[-2] or df['SMA15'].isna().iloc[-2]:
@@ -145,23 +143,15 @@ def run_strategy(df, open_positions=None, cash=None):
         print(f"[DEBUG] Last 3 SMA15: {df['SMA15'].tail(3).values}")
         return 'hold'  # Not enough data to make decision
 
-    # Example: Only buy if you have enough cash, only sell if you have a position
-    # (You can expand this logic as needed)
     want_to_buy = df['SMA5'].iloc[-1] > df['SMA15'].iloc[-1]
     want_to_sell = df['SMA5'].iloc[-1] < df['SMA15'].iloc[-1]
     symbol = df.get('symbol', [None]*len(df))[-1] if 'symbol' in df.columns else None
-    if open_positions is not None and cash is not None and symbol is not None:
-        has_position = symbol in open_positions
-        if want_to_buy and float(cash) > 0 and not has_position:
-            return 'buy'
-        elif want_to_sell and has_position:
-            return 'sell'
-        else:
-            return 'hold'
-    # Fallback: original logic
-    if want_to_buy:
+    has_position = symbol in open_positions if open_positions else False
+
+    # Only sell if SMA condition AND unrealized P/L is positive
+    if want_to_buy and float(cash) > 0 and not has_position:
         return 'buy'
-    elif want_to_sell:
+    elif want_to_sell and has_position and unrealized_pl is not None and float(unrealized_pl) > 0:
         return 'sell'
     else:
         return 'hold'
@@ -257,14 +247,23 @@ def main():
                 # Calculate max shares to buy for $1,000 per stock
                 latest_price = float(df['close'].iloc[-1]) if not df.empty else 0
                 max_qty = int(MAX_INVEST_PER_STOCK // latest_price) if latest_price > 0 else 0
-                # Pass open_positions and cash to strategy
-                action = run_strategy(df, open_positions=open_positions, cash=cash)
+
+                # Get unrealized P/L for this symbol if position exists
+                unrealized_pl = None
+                if symbol in open_positions:
+                    try:
+                        position = next((p for p in positions if p.symbol == symbol), None)
+                        if position:
+                            unrealized_pl = float(position.unrealized_pl)
+                    except Exception:
+                        unrealized_pl = None
+
+                action = run_strategy(df, open_positions=open_positions, cash=cash, unrealized_pl=unrealized_pl)
                 if action == 'buy' and max_qty > 0:
                     decisions.append(f"{symbol:<5} -> BUY {max_qty}")
                     place_order(symbol, 'buy', max_qty)
                     action_taken.add(symbol)
                 elif action == 'sell':
-                    # Sell all shares held for this symbol, but only if available
                     qty_available = int(open_positions.get(symbol, 0))
                     if qty_available > 0:
                         decisions.append(f"{symbol:<5} -> SELL {qty_available}")
