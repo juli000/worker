@@ -328,6 +328,9 @@ def main():
             except Exception as e:
                 print(f"[{datetime.datetime.now().replace(microsecond=0)}] Error selling all: {e}")
 
+        # Always sleep between iterations
+        time.sleep(30)
+
 # ================
 # 🚀 Start the bot
 # ================
