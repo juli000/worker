@@ -139,7 +139,7 @@ def fetch_data(symbol):
 # 🤖 Trading Strategy
 # ===================
 def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
-    # Relative Volume & Price Action Breakout Strategy
+    # Relative Volume & Price Action Breakout Strategy with bankroll/risk management
     if len(df) < 21:
         return 'hold', 0
     last_close = df['close'].iloc[-1]
@@ -151,16 +151,22 @@ def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
     symbol = df.get('symbol', [None]*len(df))[-1] if 'symbol' in df.columns else None
     has_position = symbol in open_positions if open_positions else False
 
+    # Dynamic max invest per stock: 20% of current cash
+    max_invest_per_stock = float(cash) * 0.2 if cash else 0
+
     # Buy: price breakout above prev_high AND relative volume spike
     if last_close > prev_high and rel_volume > 1.5 and not has_position and float(cash) > 0:
         breakout_strength = (last_close - prev_high) / prev_high
         strength = breakout_strength * rel_volume
-        invest_amount = min(MAX_INVEST_PER_STOCK, float(cash) * min(1, strength * 2))  # scale up to 2x strength
-        size = int(invest_amount // last_close)
-        return 'buy', size
+        # Only take trades with expected move >= 0.5%
+        if strength >= 0.005:
+            invest_amount = min(max_invest_per_stock, float(cash) * min(1, strength * 2))
+            size = int(invest_amount // last_close)
+            return 'buy', size
+        else:
+            return 'hold', 0
     # Sell: price breakdown below prev_low OR volume collapse
     elif (last_close < prev_low or rel_volume < 0.5) and has_position:
-        # Sell all if breakdown, or half if volume collapse
         position_size = int(open_positions.get(symbol, 0))
         if last_close < prev_low:
             size = position_size
@@ -206,20 +212,33 @@ def log_trade(symbol, action):
 def main():
     import pytz
     eastern = pytz.timezone('US/Eastern')
+    daily_start_value = None
     while True:
         now = datetime.datetime.now(eastern)
         market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = now.replace(hour=16, minute=30, second=0, microsecond=0)
         if not (market_open <= now <= market_close):
             print(f"[{now}] Market is closed. Waiting for open hours (9:30-16:30 ET)...")
-            time.sleep(15)
+            time.sleep(30)
             continue
         # Fetch account info and open positions
-        try:
-            account = api.get_account()
-            cash = float(account.cash)
-        except Exception:
-            cash = 0
+        account = None
+        for attempt in range(4):
+            try:
+                account = api.get_account()
+                cash = float(account.cash)
+                equity = float(getattr(account, 'equity', cash))
+                break
+            except Exception as e:
+                if attempt < 3:
+                    print(f"Error fetching account info: {e}. Sleeping 3 seconds and retrying {3-attempt} more time(s)...")
+                    time.sleep(3)
+                else:
+                    print(f"Failed to fetch account info after 4 attempts: {e}")
+                    cash = 0
+                    equity = 0
+        if daily_start_value is None:
+            daily_start_value = equity
         try:
             positions = api.list_positions()
             open_positions = {p.symbol: float(p.qty) for p in positions}
@@ -240,7 +259,6 @@ def main():
                     df['time'] = pd.to_datetime(df['t'], unit='ms') if df['t'].dtype != object else pd.to_datetime(df['t'])
                     df.set_index('time', inplace=True)
                 latest_price = float(df['close'].iloc[-1]) if not df.empty else 0
-                max_qty = int(MAX_INVEST_PER_STOCK // latest_price) if latest_price > 0 else 0
 
                 # Get unrealized P/L for this symbol if position exists
                 unrealized_pl = None
@@ -260,7 +278,7 @@ def main():
             except Exception as e:
                 print(f"[{datetime.datetime.now().replace(microsecond=0)}] {symbol} Error: {e}")
 
-        # Print total unrealized P&L for all open positions
+        # Print total unrealized P&L and check daily profit
         total_unrealized_pl = 0.0
         try:
             positions = api.list_positions()
@@ -271,7 +289,13 @@ def main():
                     pass
         except Exception:
             pass
-        print(f"[{datetime.datetime.now().replace(microsecond=0)}] Total Unrealized P&L: ${total_unrealized_pl:.2f}")
+        daily_profit = equity - daily_start_value
+        print(f"[{datetime.datetime.now().replace(microsecond=0)}] Total Unrealized P&L: ${total_unrealized_pl:.2f} | Daily Profit: ${daily_profit:.2f} ({(daily_profit/daily_start_value*100 if daily_start_value else 0):.2f}%)")
+        # Stop trading for the day if 1% profit reached
+        if daily_start_value and daily_profit/daily_start_value >= 0.01:
+            print(f"[{datetime.datetime.now().replace(microsecond=0)}] Target reached (1% daily gain). Pausing trading until tomorrow.")
+            while True:
+                time.sleep(60)
 
         # Check for user input to sell all positions
         import sys
