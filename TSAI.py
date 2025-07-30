@@ -67,13 +67,18 @@ BASE_URL = os.getenv('BASE_URL')
 # ⚙️ Configuration
 # ===================
 SYMBOLS = [
+    # Stocks
     'AAPL', 'MSFT', 'AMZN', 'GOOG', 'META', 'NVDA', 'TSLA', 'BRK.B', 'UNH', 'V',
     'JPM', 'XOM', 'MA', 'LLY', 'AVGO', 'HD', 'PG', 'CVX', 'COST', 'ABBV',
     'PEP', 'MRK', 'ADBE', 'KO', 'WMT', 'BAC', 'MCD', 'CSCO', 'ACN', 'ABT',
     'DHR', 'TMO', 'LIN', 'VZ', 'DIS', 'NKE', 'TXN', 'NEE', 'ORCL', 'PM',
-    'AMGN', 'MDT', 'CRM', 'HON', 'UNP', 'QCOM', 'BMY', 'LOW', 'MS'
-]  # Top 50 large-cap US stocks (IEX-compatible as possible)
-MAX_INVEST_PER_STOCK = 5000  # Max $5,000 per stock
+    'AMGN', 'MDT', 'CRM', 'HON', 'UNP', 'QCOM', 'BMY', 'LOW', 'MS',
+    # ETFs (add more as needed)
+    'SPY', 'QQQ', 'VTI', 'ARKK', 'DIA', 'IWM', 'XLK', 'XLF', 'XLE', 'XLV',
+    # Crypto (Alpaca format)
+    'BTCUSD', 'ETHUSD', 'SOLUSD', 'DOGEUSD', 'LTCUSD', 'ADAUSD', 'AVAXUSD', 'MATICUSD', 'BCHUSD', 'DOTUSD'
+]  # Top stocks, ETFs, and crypto pairs
+MAX_INVEST_PER_STOCK = 10000 #Max $5,000 per stock
 LOG_FILE = 'trade_log.csv'
 
 # ===================
@@ -134,36 +139,36 @@ def fetch_data(symbol):
 # 🤖 Trading Strategy
 # ===================
 def run_strategy(df, open_positions=None, cash=None, unrealized_pl=None):
-    # Use shorter SMAs for more frequent signals
-    df['SMA5'] = df['close'].rolling(window=5).mean()
-    df['SMA15'] = df['close'].rolling(window=15).mean()
-
-    # 🛡️ Prevent index errors if not enough data
-    if len(df) < 16 or df['SMA5'].isna().iloc[-2] or df['SMA15'].isna().iloc[-2]:
-        return 'hold'  # Not enough data to make decision
-
-    want_to_buy = df['SMA5'].iloc[-1] > df['SMA15'].iloc[-1]
-    want_to_sell = df['SMA5'].iloc[-1] < df['SMA15'].iloc[-1]
+    # Relative Volume & Price Action Breakout Strategy
+    if len(df) < 21:
+        return 'hold', 0
+    last_close = df['close'].iloc[-1]
+    prev_high = df['high'].iloc[-21:-1].max()
+    prev_low = df['low'].iloc[-21:-1].min()
+    last_volume = df['volume'].iloc[-1]
+    avg_volume = df['volume'].iloc[-21:-1].mean()
+    rel_volume = last_volume / avg_volume if avg_volume > 0 else 1
     symbol = df.get('symbol', [None]*len(df))[-1] if 'symbol' in df.columns else None
     has_position = symbol in open_positions if open_positions else False
 
-    # Take profit threshold (e.g., $50 per position)
-    TAKE_PROFIT = 25.0
-
-    # Only sell if SMA condition AND unrealized P/L is positive OR take profit reached
-    if want_to_buy and float(cash) > 0 and not has_position:
-        return 'buy'
-    elif has_position and unrealized_pl is not None:
-        # Take profit: sell if unrealized profit exceeds threshold
-        if float(unrealized_pl) >= TAKE_PROFIT:
-            return 'sell'
-        # Original sell condition: SMA5 < SMA15 and profit
-        elif want_to_sell and float(unrealized_pl) > 0:
-            return 'sell'
+    # Buy: price breakout above prev_high AND relative volume spike
+    if last_close > prev_high and rel_volume > 1.5 and not has_position and float(cash) > 0:
+        breakout_strength = (last_close - prev_high) / prev_high
+        strength = breakout_strength * rel_volume
+        invest_amount = min(MAX_INVEST_PER_STOCK, float(cash) * min(1, strength * 2))  # scale up to 2x strength
+        size = int(invest_amount // last_close)
+        return 'buy', size
+    # Sell: price breakdown below prev_low OR volume collapse
+    elif (last_close < prev_low or rel_volume < 0.5) and has_position:
+        # Sell all if breakdown, or half if volume collapse
+        position_size = int(open_positions.get(symbol, 0))
+        if last_close < prev_low:
+            size = position_size
         else:
-            return 'hold'
+            size = max(1, position_size // 2)
+        return 'sell', size
     else:
-        return 'hold'
+        return 'hold', 0
 
 # ===================
 # 💰 Execute Trade
@@ -178,18 +183,18 @@ def place_order(symbol, action, qty):
     if action == 'buy' and not has_position:
         api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
         log_trade(symbol, 'buy')
-        print(f"[{datetime.datetime.now()}] {symbol:<5} : Buy executed ({qty} shares)")
+        print(f"[{datetime.datetime.now().replace(microsecond=0)}] {symbol:<5} : Buy executed ({qty} shares)")
     elif action == 'sell' and has_position:
         api.submit_order(symbol=symbol, qty=qty, side='sell', type='market', time_in_force='gtc')
         log_trade(symbol, 'sell')
-        print(f"[{datetime.datetime.now()}] {symbol:<5} : Sell executed ({qty} shares)")
+        print(f"[{datetime.datetime.now().replace(microsecond=0)}] {symbol:<5} : Sell executed ({qty} shares)")
     # No print for hold
 
 # ===================
 # 🧾 Trade Logger
 # ===================
 def log_trade(symbol, action):
-    now = datetime.datetime.now()
+    now = datetime.datetime.now().replace(microsecond=0)
     log_entry = f"{now},{symbol},{action}\n"
 
     with open(LOG_FILE, 'a') as f:
@@ -207,75 +212,22 @@ def main():
         market_close = now.replace(hour=16, minute=30, second=0, microsecond=0)
         if not (market_open <= now <= market_close):
             print(f"[{now}] Market is closed. Waiting for open hours (9:30-16:30 ET)...")
-            time.sleep(60)
+            time.sleep(15)
             continue
-        print("\n" + "="*80 + "\n")
         # Fetch account info and open positions
         try:
             account = api.get_account()
             cash = float(account.cash)
-        except Exception as e:
-            print(f"[{datetime.datetime.now()}] Error fetching account info: {e}")
+        except Exception:
             cash = 0
         try:
             positions = api.list_positions()
             open_positions = {p.symbol: float(p.qty) for p in positions}
-        except Exception as e:
-            print(f"[{datetime.datetime.now()}] Error fetching open positions: {e}")
+        except Exception:
             open_positions = {}
 
-        # ...existing code...
-        # Print account summary at the very end, after all other output
-        print(f"\n" + "="*40)
-        print(f"[{datetime.datetime.now()}] ACCOUNT SUMMARY")
-        invested_amount = 0.0
-        num_positions = 0
-        for p in positions:
-            try:
-                invested_amount += float(p.market_value)
-                num_positions += 1
-            except Exception:
-                pass
-        try:
-            buying_power = float(getattr(account, 'buying_power', 0))
-        except Exception:
-            buying_power = 0.0
-        try:
-            portfolio_value = float(getattr(account, 'portfolio_value', 0))
-        except Exception:
-            portfolio_value = 0.0
-        # Format and align all numbers
-        label_width = 18
-        value_width = 15
-        print(f"{'Cash:':<{label_width}}{'$':>2}{cash:>{value_width-1},.2f}")
-        print(f"{'Invested:':<{label_width}}{'$':>2}{invested_amount:>{value_width-1},.2f}")
-        print(f"{'Positions:':<{label_width}}{num_positions:>{value_width}}")
-        print(f"{'Buying Power:':<{label_width}}{'$':>2}{buying_power:>{value_width-1},.2f}")
-        print(f"{'Portfolio Value:':<{label_width}}{'$':>2}{portfolio_value:>{value_width-1},.2f}")
-
-        # Print total unrealized profit for all open positions
-        total_unrealized_profit = 0.0
-        try:
-            for p in positions:
-                try:
-                    total_unrealized_profit += float(p.unrealized_pl)
-                except Exception:
-                    pass
-            print(f"Total Unrealized Profit: ${total_unrealized_profit:,.2f}")
-        except Exception:
-            print("Could not calculate total unrealized profit.")
-        print("-"*40)
-
-        print_open_trades()
-        all_data = {}
-        decisions = []
-        holds = []
-        total_buy_cost = 0.0
-        buy_details = []
-        # Fetch all bars for all symbols at once using REST API (1Min, 1000 bars)
         bars_data = fetch_bars_rest(SYMBOLS, limit=1000, timeframe='1Min')
         bars_dict = bars_data.get('bars', {}) if bars_data else {}
-        action_taken = set()
         for symbol in SYMBOLS:
             try:
                 bars = bars_dict.get(symbol, [])
@@ -287,7 +239,6 @@ def main():
                 if 't' in df.columns:
                     df['time'] = pd.to_datetime(df['t'], unit='ms') if df['t'].dtype != object else pd.to_datetime(df['t'])
                     df.set_index('time', inplace=True)
-                all_data[symbol] = df.tail(1)
                 latest_price = float(df['close'].iloc[-1]) if not df.empty else 0
                 max_qty = int(MAX_INVEST_PER_STOCK // latest_price) if latest_price > 0 else 0
 
@@ -301,66 +252,57 @@ def main():
                     except Exception:
                         unrealized_pl = None
 
-                action = run_strategy(df, open_positions=open_positions, cash=cash, unrealized_pl=unrealized_pl)
-                if action == 'buy' and max_qty > 0:
-                    buy_cost = latest_price * max_qty
-                    total_buy_cost += buy_cost
-                    buy_details.append(f"{symbol}: {max_qty} @ ${latest_price:.2f} = ${buy_cost:.2f}")
-                    decisions.append(f"{symbol:<5} -> BUY {max_qty}")
-                    place_order(symbol, 'buy', max_qty)
-                    action_taken.add(symbol)
-                elif action == 'sell':
-                    qty_available = int(open_positions.get(symbol, 0))
-                    if qty_available > 0:
-                        decisions.append(f"{symbol:<5} -> SELL {qty_available}")
-                        place_order(symbol, 'sell', qty_available)
-                        action_taken.add(symbol)
-                else:
-                    holds.append(f"{symbol:<5}")
+                action, size = run_strategy(df, open_positions=open_positions, cash=cash, unrealized_pl=unrealized_pl)
+                if action == 'buy' and size > 0:
+                    place_order(symbol, 'buy', size)
+                elif action == 'sell' and size > 0:
+                    place_order(symbol, 'sell', size)
             except Exception as e:
-                print(f"[{datetime.datetime.now()}] {symbol} Error: {e}")
+                print(f"[{datetime.datetime.now().replace(microsecond=0)}] {symbol} Error: {e}")
 
-        # Ensure all open positions are shown as HOLD if no action was taken
-        for symbol in open_positions:
-            if symbol not in action_taken and f"{symbol:<5}" not in holds:
-                holds.append(f"{symbol:<5}")
+        # Print total unrealized P&L for all open positions
+        total_unrealized_pl = 0.0
+        try:
+            positions = api.list_positions()
+            for p in positions:
+                try:
+                    total_unrealized_pl += float(p.unrealized_pl)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        print(f"[{datetime.datetime.now().replace(microsecond=0)}] Total Unrealized P&L: ${total_unrealized_pl:.2f}")
 
-        # Do not print price data as requested
+        # Check for user input to sell all positions
+        import sys
+        user_input = None
+        try:
+            import msvcrt
+            start = time.time()
+            while time.time() - start < 15:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch.lower() == 's':
+                        user_input = 's'
+                        break
+                time.sleep(0.1)
+        except ImportError:
+            # Non-Windows fallback
+            import select
+            i, o, e = select.select([sys.stdin], [], [], 15)
+            if i:
+                user_input = sys.stdin.readline().strip().lower()
 
-        # After all buys, print buy details and total buy cost
-        if buy_details:
-            print("\n" + "="*40)
-            print("BUY SUMMARY")
-            print("-"*40)
-            print(f"{'Symbol':<8} {'Qty':<6} {'Price':<10} {'Total':<12}")
-            for detail in buy_details:
-                # detail format: "{symbol}: {max_qty} @ ${latest_price:.2f} = ${buy_cost:.2f}"
-                parts = detail.split(':')
-                symbol = parts[0]
-                rest = parts[1].strip().split(' ')
-                qty = rest[0]
-                price = rest[2]
-                total = rest[-1]
-                print(f"{symbol:<8} {qty:<6} {price:<10} {total:<12}")
-            print("-"*40)
-            print(f"Total Buy Cost This Iteration: ${total_buy_cost:.2f}")
-            print("="*40)
-
-        # Print only actual actions taken (buy/sell) for this iteration
-        print("\n" + "="*40)
-        print(f"[{datetime.datetime.now()}] DECISIONS")
-        print("-"*40)
-        # Remove duplicates and only print actions that occurred
-        printed = set()
-        for decision in decisions:
-            if decision not in printed:
-                print(decision)
-                printed.add(decision)
-        print("="*40)
-
-        print(f"[{datetime.datetime.now()}] Loop complete. Sleeping before next iteration...")
-        # Sleep for 2 minutes (for testing/demo purposes)
-        time.sleep(120)
+        if user_input == 's':
+            try:
+                positions = api.list_positions()
+                for p in positions:
+                    qty = int(float(p.qty))
+                    if qty > 0:
+                        place_order(p.symbol, 'sell', qty)
+                print(f"[{datetime.datetime.now().replace(microsecond=0)}] All positions sold.")
+            except Exception as e:
+                print(f"[{datetime.datetime.now().replace(microsecond=0)}] Error selling all: {e}")
 
 # ================
 # 🚀 Start the bot
